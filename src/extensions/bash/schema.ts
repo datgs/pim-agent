@@ -66,3 +66,28 @@ export type BashDetails = {
   readonly stdout: BashStreamDetails;
   readonly stderr: BashStreamDetails;
 };
+
+export const jobsSchema = Type.Object(
+  {
+    action: Type.Union(
+      [
+        Type.Literal("list"),
+        Type.Literal("status"),
+        Type.Literal("output"),
+        Type.Literal("kill"),
+      ],
+      {
+        description:
+          "list: all background jobs. status/output/kill: operate on one job by id.",
+      }
+    ),
+    id: Type.Union([
+      Type.String({
+        description: "Job id (e.g. bash-3). Required for status/output/kill.",
+      }),
+      Type.Null(),
+    ]),
+  },
+  { additionalProperties: false }
+);
+export type JobsInput = Static<typeof jobsSchema>;

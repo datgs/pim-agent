@@ -60,13 +60,25 @@ function getReader(
   return stream ? stream.getReader() : null;
 }
 
+export type BashRunOutcome =
+  | BashCommandResult
+  | {
+      // The command is still running past its timeout; `done` resolves with
+      // its final result once it exits, is killed, or the process ends.
+      readonly backgrounded: true;
+      readonly done: Promise<BashCommandResult>;
+      readonly kill: () => void;
+      readonly stdout: { readonly totalBytes: number };
+      readonly stderr: { readonly totalBytes: number };
+    };
+
 export async function runBashCommand(
   command: string,
   timeoutMs: number,
   signal: AbortSignal | undefined,
   cwd: string,
   env?: NodeJS.ProcessEnv
-): Promise<BashCommandResult> {
+): Promise<BashRunOutcome> {
   const startedAt = Date.now();
   const stdoutCap = new StreamCapture({ prefix: "bash", ext: "out" });
   const stderrCap = new StreamCapture({ prefix: "bash", ext: "err" });
@@ -111,8 +123,12 @@ export async function runBashCommand(
 
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const exitedPromise = proc.exited.then(() => "exited" as const);
-  const timeoutPromise = new Promise<"timeout">((resolve) => {
-    timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
+  let timeoutPromise = new Promise<"timeout">((resolve) => {
+    const timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    // Unref'd: a caller that drops the returned handle should not keep the
+    // event loop alive on the timeout alone.
+    timer.unref?.();
+    timeoutHandle = timer;
   });
 
   let abortResolve: ((v: "aborted") => void) | null = null;
@@ -131,70 +147,113 @@ export async function runBashCommand(
     }
   }
 
-  let exitCode: number | null = null;
-  let signalCode: NodeJS.Signals | null = null;
-  try {
-    const result = await Promise.race([
-      exitedPromise,
-      timeoutPromise,
-      abortPromise,
-    ]);
+  const settle = async (): Promise<BashCommandResult> => {
+    let exitCode: number | null = null;
+    let signalCode: NodeJS.Signals | null = null;
+    try {
+      const result = await Promise.race([
+        exitedPromise,
+        timeoutPromise,
+        abortPromise,
+      ]);
 
-    if (result === "timeout") {
-      timedOut = true;
-    }
+      if (result === "timeout") {
+        timedOut = true;
+      }
 
-    if (result !== "exited") {
-      killGroup(proc.pid, "SIGTERM");
-      const sigkillTimer = setTimeout(() => {
-        killGroup(proc.pid, "SIGKILL");
-      }, KILL_GRACE_MS);
-      try {
-        await proc.exited;
-      } finally {
-        clearTimeout(sigkillTimer);
+      if (result !== "exited") {
+        killGroup(proc.pid, "SIGTERM");
+        const sigkillTimer = setTimeout(() => {
+          killGroup(proc.pid, "SIGKILL");
+        }, KILL_GRACE_MS);
+        try {
+          await proc.exited;
+        } finally {
+          clearTimeout(sigkillTimer);
+        }
+      }
+
+      exitCode = proc.exitCode ?? null;
+      signalCode =
+        (proc.signalCode as NodeJS.Signals | null | undefined) ?? null;
+
+      // Bound the drain so a detached grandchild holding the pipe can't keep
+      // the drain promise + capture buffer alive past this call.
+      await Promise.race([
+        Promise.all([stdoutDrain, stderrDrain]),
+        Bun.sleep(DRAIN_GRACE_MS),
+      ]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      for (const reader of [stdoutReader, stderrReader]) {
+        if (!reader) {
+          continue;
+        }
+        try {
+          void reader.cancel().catch(() => {});
+        } catch {}
+      }
+      if (proc.pid !== undefined) {
+        activePids.delete(proc.pid);
       }
     }
 
-    exitCode = proc.exitCode ?? null;
-    signalCode = (proc.signalCode as NodeJS.Signals | null | undefined) ?? null;
+    const stdoutPath = stdoutCap.finishSpill();
+    const stderrPath = stderrCap.finishSpill();
 
-    // Bound the drain so a detached grandchild holding the pipe can't keep
-    // the drain promise + capture buffer alive past this call.
-    await Promise.race([
-      Promise.all([stdoutDrain, stderrDrain]),
-      Bun.sleep(DRAIN_GRACE_MS),
-    ]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-    if (signal) {
-      signal.removeEventListener("abort", onAbort);
-    }
-    for (const reader of [stdoutReader, stderrReader]) {
-      if (!reader) {
-        continue;
-      }
-      try {
-        void reader.cancel().catch(() => {});
-      } catch {}
-    }
-    if (proc.pid !== undefined) {
-      activePids.delete(proc.pid);
-    }
+    return {
+      exitCode,
+      signal: signalCode,
+      stdout: { ...stdoutCap.snapshot(), path: stdoutPath },
+      stderr: { ...stderrCap.snapshot(), path: stderrPath },
+      timedOut,
+      aborted,
+      durationMs: Date.now() - startedAt,
+    };
+  };
+
+  const result = await Promise.race([
+    exitedPromise.then(() => "exited" as const),
+    timeoutPromise,
+    abortPromise,
+  ]);
+
+  if (result === "exited") {
+    return settle();
   }
 
-  const stdoutPath = stdoutCap.finishSpill();
-  const stderrPath = stderrCap.finishSpill();
+  if (result === "aborted") {
+    return settle();
+  }
+
+  // Timeout: the command keeps running in the background. Drains keep
+  // capturing output into the same bounded buffers; `done` resolves with
+  // the final result after exit, kill, or the drain grace bound. The elapsed
+  // timeout promise is replaced so the settle race can't resolve "timeout"
+  // again and kill the group.
+  timedOut = true;
+  if (timeoutHandle) {
+    clearTimeout(timeoutHandle);
+    timeoutHandle = null;
+  }
+  timeoutPromise = new Promise<"timeout">(() => {});
+  const done = settle();
 
   return {
-    exitCode,
-    signal: signalCode,
-    stdout: { ...stdoutCap.snapshot(), path: stdoutPath },
-    stderr: { ...stderrCap.snapshot(), path: stderrPath },
-    timedOut,
-    aborted,
-    durationMs: Date.now() - startedAt,
+    backgrounded: true,
+    done: done.then((r) => ({ ...r, timedOut: true })),
+    kill: () => {
+      killGroup(proc.pid, "SIGTERM");
+      setTimeout(() => {
+        killGroup(proc.pid, "SIGKILL");
+      }, KILL_GRACE_MS).unref?.();
+    },
+    stdout: { totalBytes: stdoutCap.totalBytes },
+    stderr: { totalBytes: stderrCap.totalBytes },
   };
 }
