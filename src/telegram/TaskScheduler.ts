@@ -3,10 +3,12 @@ import type { ScheduleSpec, ScheduledTask } from "./TaskSchema";
 import { TaskStore } from "./TaskStore";
 
 export type RunTaskFn = (task: ScheduledTask) => Promise<void>;
+export type RunWatchProbeFn = (command: string) => Promise<string>;
 
 export type TaskSchedulerOptions = {
   readonly configDir: string;
   readonly runTask: RunTaskFn;
+  readonly runWatchProbe?: RunWatchProbeFn;
   readonly pollIntervalMs?: number;
   readonly now?: () => number;
 };
@@ -17,6 +19,7 @@ const MIN_INTERVAL_MS = 60_000;
 export class TaskScheduler {
   private readonly configDir: string;
   private readonly runTask: RunTaskFn;
+  private readonly runWatchProbe: RunWatchProbeFn | undefined;
   private readonly pollIntervalMs: number;
   private readonly now: () => number;
   private timer: Timer | undefined;
@@ -31,6 +34,7 @@ export class TaskScheduler {
   public constructor(opts: TaskSchedulerOptions) {
     this.configDir = opts.configDir;
     this.runTask = opts.runTask;
+    this.runWatchProbe = opts.runWatchProbe;
     this.pollIntervalMs = opts.pollIntervalMs ?? 10_000;
     this.now = opts.now ?? ((): number => Date.now());
   }
@@ -227,7 +231,11 @@ export class TaskScheduler {
         continue;
       }
 
-      fires.push(this.fireAndReschedule(task, now));
+      if (task.schedule.type === "watch") {
+        fires.push(this.probeAndMaybeFire(task, now));
+      } else {
+        fires.push(this.fireAndReschedule(task, now));
+      }
     }
 
     await Promise.allSettled(fires);
@@ -250,6 +258,64 @@ export class TaskScheduler {
     }
   }
 
+  // Watch tasks poll a probe command and fire only when its output changes.
+  // The baseline observation is recorded without firing; a failed probe
+  // keeps the task alive and simply retries next interval — an agent that
+  // misses a poll must not lose its trigger.
+  private async probeAndMaybeFire(
+    task: ScheduledTask,
+    probedAt: number
+  ): Promise<void> {
+    const schedule = task.schedule;
+    if (schedule.type !== "watch") {
+      return;
+    }
+
+    const next = {
+      ...task,
+      nextRun: new Date(
+        probedAt + TaskScheduler.parseDuration(schedule.every)
+      ).toISOString(),
+    };
+
+    if (!this.runWatchProbe) {
+      console.error(`[scheduler] task ${task.id}: no watch probe configured`);
+      await this.saveTask(next);
+      return;
+    }
+
+    let output: string;
+    try {
+      output = await this.runWatchProbe(schedule.command);
+    } catch (err) {
+      console.warn(`[scheduler] task ${task.id} probe failed:`, err);
+      await this.saveTask(next);
+      return;
+    }
+
+    const fp = TaskScheduler.fingerprint(output);
+    const previous = task.lastFingerprint;
+    if (previous === undefined) {
+      await this.saveTask({ ...next, lastFingerprint: fp });
+      return;
+    }
+    if (previous === fp) {
+      await this.saveTask(next);
+      return;
+    }
+
+    await this.saveTask({ ...next, lastFingerprint: fp });
+    try {
+      await this.runTask(task);
+    } catch (err) {
+      console.error(`[scheduler] task ${task.id} runTask failed:`, err);
+    }
+  }
+
+  private static fingerprint(output: string): string {
+    return new Bun.CryptoHasher("sha256").update(output).digest("hex");
+  }
+
   private computeFirstRun(schedule: ScheduleSpec): string {
     const now = this.now();
     if (schedule.type === "once") {
@@ -262,7 +328,7 @@ export class TaskScheduler {
       }
       return new Date(at).toISOString();
     }
-    if (schedule.type === "interval") {
+    if (schedule.type === "interval" || schedule.type === "watch") {
       const ms = TaskScheduler.parseDuration(schedule.every);
       if (ms < MIN_INTERVAL_MS) {
         throw new Error(`interval must be at least 1 minute`);
@@ -284,7 +350,7 @@ export class TaskScheduler {
     if (schedule.type === "once") {
       return undefined;
     }
-    if (schedule.type === "interval") {
+    if (schedule.type === "interval" || schedule.type === "watch") {
       const ms = TaskScheduler.parseDuration(schedule.every);
       return { ...task, nextRun: new Date(fromMs + ms).toISOString() };
     }

@@ -22,6 +22,7 @@ afterEach(async () => {
 function makeScheduler(opts: {
   readonly now: () => number;
   readonly onFire?: (task: ScheduledTask) => Promise<void>;
+  readonly probe?: (command: string) => Promise<string>;
 }): { readonly scheduler: TaskScheduler; readonly fired: ScheduledTask[] } {
   const fired: ScheduledTask[] = [];
   const scheduler = new TaskScheduler({
@@ -30,6 +31,7 @@ function makeScheduler(opts: {
       fired.push(task);
       await opts.onFire?.(task);
     },
+    runWatchProbe: opts.probe,
     now: opts.now,
   });
   return { scheduler, fired };
@@ -315,5 +317,99 @@ describe("TaskScheduler.list", () => {
     const threaded = await scheduler.list({ chatId: 1, threadId: 99 });
     expect(threaded).toHaveLength(1);
     expect(threaded[0]!.prompt).toBe("b");
+  });
+});
+
+describe("TaskScheduler watch triggers", () => {
+  const watchTask = (every = "1m") => ({
+    prompt: "check the thing",
+    schedule: { type: "watch" as const, command: "probe-cmd", every },
+  });
+
+  test("baseline run records a fingerprint without firing", async () => {
+    const t0 = Date.parse("2026-05-14T12:00:00Z");
+    const t1 = t0 + 90_000; // past the first nextRun (t0 + 1m)
+    const { scheduler, fired } = makeScheduler({
+      now: () => t1,
+      probe: async () => "state-A",
+    });
+    const creator = new TaskScheduler({
+      configDir: tmp,
+      runTask: async () => {},
+      now: () => t0,
+    });
+    await creator.create(sessionId, watchTask());
+    await scheduler.tick();
+    expect(fired).toHaveLength(0);
+    const [task] = await scheduler.list(sessionId);
+    expect(task?.lastFingerprint).toBeTruthy();
+  });
+
+  test("fires only when probe output changes", async () => {
+    const t0 = Date.parse("2026-05-14T12:00:00Z");
+    let state = "state-A";
+    let now = t0;
+    const { scheduler, fired } = makeScheduler({
+      now: () => now,
+      probe: async () => state,
+    });
+    await scheduler.create(sessionId, watchTask());
+    now = t0 + 90_000;
+    await scheduler.tick(); // baseline
+    await scheduler.tick(); // same output → no fire
+    expect(fired).toHaveLength(0);
+    state = "state-B";
+    now += 90_000;
+    await scheduler.tick(); // changed → fire
+    expect(fired).toHaveLength(1);
+    await scheduler.tick(); // unchanged → no double-fire
+    expect(fired).toHaveLength(1);
+  });
+
+  test("a failed probe keeps the task alive and retries", async () => {
+    const t0 = Date.parse("2026-05-14T12:00:00Z");
+    let now = t0;
+    let shouldFail = false;
+    const { scheduler, fired } = makeScheduler({
+      now: () => now,
+      probe: async () => {
+        if (shouldFail) {
+          throw new Error("probe unreachable");
+        }
+        return "state-A";
+      },
+    });
+    const task = await scheduler.create(sessionId, watchTask());
+    now = t0 + 90_000;
+    await scheduler.tick(); // baseline
+    shouldFail = true;
+    now += 90_000;
+    await scheduler.tick(); // probe fails → no fire, task survives
+    expect(fired).toHaveLength(0);
+    const [still] = await scheduler.list(sessionId);
+    expect(still?.id).toBe(task.id);
+    expect(still?.status).toBe("active");
+    shouldFail = false;
+    now += 90_000;
+    await scheduler.tick(); // recovers; same output → still no fire
+    expect(fired).toHaveLength(0);
+  });
+
+  test("watch persists fingerprint across scheduler restarts", async () => {
+    const t0 = Date.parse("2026-05-14T12:00:00Z");
+    let now = t0;
+    let state = "state-A";
+    const probe = async () => state;
+    const { scheduler: s1 } = makeScheduler({ now: () => now, probe });
+    await s1.create(sessionId, watchTask());
+    now = t0 + 90_000;
+    await s1.tick(); // baseline persisted
+    const { scheduler: s2, fired } = makeScheduler({ now: () => now, probe });
+    await s2.tick(); // same fingerprint → no fire after restart
+    expect(fired).toHaveLength(0);
+    state = "state-B";
+    now += 90_000;
+    await s2.tick();
+    expect(fired).toHaveLength(1);
   });
 });
