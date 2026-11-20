@@ -3,7 +3,12 @@ import { type Static, Type } from "typebox";
 export type ScheduleSpec =
   | { readonly type: "once"; readonly at: string }
   | { readonly type: "interval"; readonly every: string }
-  | { readonly type: "cron"; readonly expr: string };
+  | { readonly type: "cron"; readonly expr: string }
+  | {
+      readonly type: "watch";
+      readonly command: string;
+      readonly every: string;
+    };
 
 export type ScheduledTask = {
   readonly id: string;
@@ -16,6 +21,9 @@ export type ScheduledTask = {
   readonly expires: string | null;
   readonly isolatedSession: boolean;
   readonly createdAt: string;
+  // Watch-trigger state: fingerprint of the last observed probe output.
+  // Absent until the baseline run establishes it; the baseline never fires.
+  readonly lastFingerprint?: string;
 };
 
 const scheduleSchema = Type.Union([
@@ -40,6 +48,18 @@ const scheduleSchema = Type.Union([
         "Standard 5-field cron expression in UTC. Macros @hourly, @daily, @weekly, @monthly, @yearly supported.",
     }),
   }),
+  Type.Object({
+    type: Type.Literal("watch"),
+    command: Type.String({
+      description:
+        "Probe command run every interval (e.g. 'git ls-remote origin HEAD', 'curl -s https://status.example.com'). " +
+        "The task fires when its output changes from the previous observation. The first run only records a baseline and does not fire.",
+      minLength: 1,
+    }),
+    every: Type.String({
+      description: "Poll interval like '30m', '2h', '1h30m'. Minimum 1 minute.",
+    }),
+  }),
 ]);
 
 export const taskToolSchema = Type.Object({
@@ -54,7 +74,8 @@ export const taskToolSchema = Type.Object({
     ],
     {
       description:
-        "create: schedule a new task. list: see this thread's tasks. delete/pause/resume: by id. update_prompt: change a task's prompt.",
+        "create: schedule a new task. list: see this thread's tasks. delete/pause/resume: by id. update_prompt: change a task's prompt. " +
+        "Schedule types: once at a timestamp, interval, cron — or 'watch': poll a probe command every interval and fire when its output changes.",
     }
   ),
   prompt: Type.Optional(

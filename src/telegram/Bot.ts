@@ -26,6 +26,7 @@ export class Bot {
     this.scheduler = new TaskScheduler({
       configDir: config.configDir,
       runTask: (task) => this.runScheduledTask(task),
+      runWatchProbe: (command) => this.runWatchProbe(command),
     });
     this.registry = new SessionRegistry(
       config,
@@ -113,12 +114,50 @@ export class Bot {
     await this.registry.disposeAll();
   }
 
+  // Watch probes run a user-authored shell command with a hard timeout and
+  // a capped capture — they are state probes, not work, so they must never
+  // block the scheduler tick for long or grow memory unbounded.
+  private async runWatchProbe(command: string): Promise<string> {
+    const proc = Bun.spawn({
+      cmd: ["bash", "-lc", command],
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env },
+    });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill("SIGTERM");
+      setTimeout(() => proc.kill("SIGKILL"), 2000).unref?.();
+    }, 30_000);
+    timer.unref?.();
+    try {
+      const text = await new Response(proc.stdout).text().catch(() => "");
+      await proc.exited;
+      if (timedOut) {
+        throw new Error(`watch probe timed out after 30s`);
+      }
+      return text.slice(0, 64_000);
+    } finally {
+      clearTimeout(timer);
+      try {
+        await new Response(proc.stderr).text();
+      } catch {}
+    }
+  }
+
   private async runScheduledTask(task: ScheduledTask): Promise<void> {
     const sessionId: SessionId = {
       chatId: task.chatId,
       threadId: task.threadId,
     };
-    const prompt: Prompt = { text: task.prompt, options: {} };
+    const prompt: Prompt = {
+      text:
+        task.schedule.type === "watch"
+          ? `${task.prompt}\n\n[watch trigger: the monitored output changed]`
+          : task.prompt,
+      options: {},
+    };
     const session = this.registry.get(sessionId);
     await session.run(
       (agent) => this.handleTurn(session, agent, prompt),
