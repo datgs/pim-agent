@@ -7,6 +7,7 @@ import {
 } from "grammy";
 
 import { Paths } from "../shared/Paths";
+import type { TaskScheduler } from "./TaskScheduler";
 import {
   LOGS_MODES,
   THINKING_LEVELS,
@@ -44,6 +45,7 @@ export const BOT_COMMANDS: readonly BotCommand[] = [
     description: "Toggle temporary chat (no history, fresh each message)",
   },
   { command: "update", description: "Update the bot to the latest version" },
+  { command: "tasks", description: "List this thread's scheduled tasks" },
   { command: "commands", description: "Register all commands with Telegram" },
 ];
 
@@ -79,7 +81,8 @@ export class Commands {
   public constructor(
     config: TelegramConfig,
     api: Api,
-    registry: SessionRegistry
+    registry: SessionRegistry,
+    private readonly scheduler: TaskScheduler
   ) {
     this.config = config;
     this.api = api;
@@ -139,6 +142,9 @@ export class Commands {
           return;
         case "/temporary":
           await this.cmdTemporary(session);
+          return;
+        case "/tasks":
+          await this.cmdTasks(session);
           return;
         case "/update":
           await this.runQueued(ctx, session, () => this.cmdUpdate(session));
@@ -523,6 +529,34 @@ export class Commands {
       session.temporary
     );
     await this.sendWithFallback(session.id, html, kb);
+  }
+
+  private async cmdTasks(session: Session): Promise<void> {
+    const tasks = await this.scheduler.list(session.id);
+    if (tasks.length === 0) {
+      await this.sendPlain(session.id, "No scheduled tasks for this thread.");
+      return;
+    }
+    const lines: string[] = [`<b>Scheduled tasks (${tasks.length})</b>`, ""];
+    for (const t of tasks) {
+      const schedule =
+        t.schedule.type === "once"
+          ? `once ${t.schedule.at}`
+          : t.schedule.type === "cron"
+            ? `cron ${t.schedule.expr}`
+            : t.schedule.type === "watch"
+              ? `watch ${t.schedule.every} (cmd: ${Markdown.escape(t.schedule.command)})${t.lastFingerprint === undefined ? " — waiting for baseline" : ""}`
+              : `every ${t.schedule.every}`;
+      const status = t.status === "paused" ? "⏸ paused" : "▶ active";
+      lines.push(`<code>${t.id}</code> ${status}`);
+      lines.push(`  ${schedule}`);
+      lines.push(`  next: ${t.nextRun}`);
+      lines.push(
+        `  prompt: ${Markdown.escape(t.prompt.slice(0, 80))}${t.prompt.length > 80 ? "…" : ""}`
+      );
+      lines.push("");
+    }
+    await this.sendWithFallback(session.id, lines.join("\n"));
   }
 
   private buildTemporaryPicker(

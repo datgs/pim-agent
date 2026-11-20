@@ -33,7 +33,12 @@ export class Bot {
       this.grammy.api,
       this.scheduler
     );
-    this.commands = new Commands(config, this.grammy.api, this.registry);
+    this.commands = new Commands(
+      config,
+      this.grammy.api,
+      this.registry,
+      this.scheduler
+    );
 
     this.grammy.on("callback_query:data", async (ctx) => {
       if (!this.allowSet.has(ctx.chat?.id ?? -1)) {
