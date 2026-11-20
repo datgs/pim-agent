@@ -3,8 +3,13 @@ import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SpillCache } from "../../shared/SpillCache";
-import { killAllActiveBashGroups, runBashCommand } from "./run";
 import {
+  type BashRunOutcome,
+  killAllActiveBashGroups,
+  runBashCommand,
+} from "./run";
+import {
+  type BashCommandResult,
   DRAIN_GRACE_MS,
   KILL_GRACE_MS,
   STREAM_HEAD_BYTES,
@@ -63,14 +68,20 @@ async function waitForNoProcess(
   }
 }
 
+function expectResult(r: BashRunOutcome): BashCommandResult {
+  if ("backgrounded" in r) {
+    throw new Error("expected settled result, got backgrounded");
+  }
+  return r;
+}
+
+async function run(command: string, timeoutMs = 5000, cwd = process.cwd()) {
+  return expectResult(await runBashCommand(command, timeoutMs, undefined, cwd));
+}
+
 describe("runBashCommand (integration)", () => {
   test("captures stdout from a successful command", async () => {
-    const r = await runBashCommand(
-      "echo hello",
-      5000,
-      undefined,
-      process.cwd()
-    );
+    const r = await run("echo hello");
     expect(r.exitCode).toBe(0);
     expect(r.aborted).toBe(false);
     expect(r.timedOut).toBe(false);
@@ -79,44 +90,39 @@ describe("runBashCommand (integration)", () => {
   });
 
   test("captures stderr and non-zero exit", async () => {
-    const r = await runBashCommand(
-      "echo oops 1>&2; exit 3",
-      5000,
-      undefined,
-      process.cwd()
-    );
+    const r = await run("echo oops 1>&2; exit 3");
     expect(r.exitCode).toBe(3);
     expect(r.stderr.text.trim()).toBe("oops");
   });
 
   test("respects cwd", async () => {
-    const r = await runBashCommand("pwd", 5000, undefined, "/tmp");
+    const r = await run("pwd", 5000, "/tmp");
     expect(r.exitCode).toBe(0);
     expect(r.stdout.text.trim()).toBe(await realpath("/tmp"));
   });
 
-  test("times out and reports timedOut", async () => {
-    const r = await runBashCommand("sleep 5", 25, undefined, process.cwd());
-    expect(r.timedOut).toBe(true);
-    expect(r.exitCode === null || r.exitCode !== 0).toBe(true);
+  test("times out into a backgrounded outcome that resolves on exit", async () => {
+    const r = await runBashCommand("sleep 0.1", 25, undefined, process.cwd());
+    expect("backgrounded" in r && r.backgrounded).toBe(true);
+    if (!("backgrounded" in r)) {
+      throw new Error("expected backgrounded outcome");
+    }
+    const done = await r.done;
+    expect(done.timedOut).toBe(true);
+    expect(done.exitCode).toBe(0);
   });
 
   test("aborts when signal fires", async () => {
     const ctrl = new AbortController();
     const promise = runBashCommand("sleep 5", 5000, ctrl.signal, process.cwd());
     ctrl.abort();
-    const r = await promise;
+    const r = expectResult(await promise);
     expect(r.aborted).toBe(true);
   });
 
   test("returns promptly when a backgrounded child inherits the pipe", async () => {
     const startedAt = Date.now();
-    const r = await runBashCommand(
-      "nohup sleep 47 > /dev/null 2>&1 & disown; echo done",
-      5000,
-      undefined,
-      process.cwd()
-    );
+    const r = await run("nohup sleep 47 > /dev/null 2>&1 & disown; echo done");
     const elapsed = Date.now() - startedAt;
     expect(r.exitCode).toBe(0);
     expect(r.timedOut).toBe(false);
@@ -128,7 +134,7 @@ describe("runBashCommand (integration)", () => {
     } catch {}
   });
 
-  test("timeout kills the whole process group", async () => {
+  test("timed-out command keeps running until killed", async () => {
     const marker = `pim-test-timeout-${Date.now()}`;
     const startedAt = Date.now();
     const r = await runBashCommand(
@@ -138,10 +144,18 @@ describe("runBashCommand (integration)", () => {
       process.cwd()
     );
     const elapsed = Date.now() - startedAt;
-    expect(r.timedOut).toBe(true);
-    expect(r.exitCode === null || r.exitCode !== 0).toBe(true);
-    expect(elapsed).toBeLessThan(KILL_GRACE_MS + 2000);
-    await waitForNoProcess(marker, KILL_GRACE_MS + 500);
+    if (!("backgrounded" in r)) {
+      throw new Error("expected backgrounded outcome");
+    }
+    expect(elapsed).toBeLessThan(2000);
+    // Still alive after the old kill window.
+    await Bun.sleep(KILL_GRACE_MS + 200);
+    expect(Bun.spawnSync({ cmd: ["pgrep", "-f", marker] }).exitCode).toBe(0);
+    r.kill();
+    await waitForNoProcess(marker, KILL_GRACE_MS + 3000);
+    const done = await r.done;
+    expect(done.timedOut).toBe(true);
+    expect(done.signal === "SIGTERM" || done.signal === "SIGKILL").toBe(true);
   });
 
   test("does not crash on timeout while drains still hold readers", async () => {
@@ -154,9 +168,14 @@ describe("runBashCommand (integration)", () => {
     process.on("unhandledRejection", onRejection);
     try {
       const r = await runBashCommand("sleep 5", 25, undefined, process.cwd());
-      expect(r.timedOut).toBe(true);
+      expect("backgrounded" in r && r.backgrounded).toBe(true);
+      if (!("backgrounded" in r)) {
+        throw new Error("expected backgrounded outcome");
+      }
       await Bun.sleep(25);
       expect(rejections).toEqual([]);
+      r.kill();
+      await r.done;
     } finally {
       process.off("unhandledRejection", onRejection);
     }
@@ -170,11 +189,8 @@ describe("runBashCommand (integration)", () => {
       // bound forces us to return anyway. The marker lets us clean up after.
       const marker = `pim-test-detached-${Date.now()}`;
       const startedAt = Date.now();
-      const r = await runBashCommand(
-        `setsid bash -c 'sleep 60; echo ${marker}' > /tmp/${marker}.out 2>&1 < /dev/null & disown; echo done`,
-        5000,
-        undefined,
-        process.cwd()
+      const r = await run(
+        `setsid bash -c 'sleep 60; echo ${marker}' > /tmp/${marker}.out 2>&1 < /dev/null & disown; echo done`
       );
       const elapsed = Date.now() - startedAt;
       expect(r.exitCode).toBe(0);
@@ -186,6 +202,24 @@ describe("runBashCommand (integration)", () => {
       } catch {}
     }
   );
+
+  test("kill() stops a backgrounded job's process group", async () => {
+    const marker = `pim-test-kill-${Date.now()}`;
+    const r = await runBashCommand(
+      `bash -c ${shellQuote(`exec -a ${marker} sleep 60`)}`,
+      50,
+      undefined,
+      process.cwd()
+    );
+    if (!("backgrounded" in r)) {
+      throw new Error("expected backgrounded outcome");
+    }
+    r.kill();
+    const done = await r.done;
+    expect(done.timedOut).toBe(true);
+    expect(done.exitCode === null || done.exitCode !== 0).toBe(true);
+    await waitForNoProcess(marker, KILL_GRACE_MS + 3000);
+  });
 
   test("killAllActiveBashGroups sweeps in-flight subtrees", async () => {
     const id = Date.now();
@@ -201,7 +235,7 @@ describe("runBashCommand (integration)", () => {
     try {
       await waitForFile(ready, 1000);
       killAllActiveBashGroups("SIGTERM");
-      const result = await pending;
+      const result = expectResult(await pending);
       expect(result.exitCode === null || result.exitCode !== 0).toBe(true);
       await waitForNoProcess(processMarker, KILL_GRACE_MS + 500);
       expect(await Bun.file(marker).exists()).toBe(false);
@@ -212,12 +246,7 @@ describe("runBashCommand (integration)", () => {
 
   test("truncates very large stdout", async () => {
     const totalBytes = STREAM_HEAD_BYTES + STREAM_TAIL_BYTES + 1000;
-    const r = await runBashCommand(
-      `head -c ${totalBytes} /dev/zero | tr '\\0' 'A'`,
-      5000,
-      undefined,
-      process.cwd()
-    );
+    const r = await run(`head -c ${totalBytes} /dev/zero | tr '\\0' 'A'`);
     expect(r.exitCode).toBe(0);
     expect(r.stdout.totalBytes).toBe(totalBytes);
     expect(r.stdout.truncated).toBe(true);
@@ -226,12 +255,7 @@ describe("runBashCommand (integration)", () => {
 
   test("spills full stdout to ~/.pim/cache when truncated", async () => {
     const totalBytes = STREAM_HEAD_BYTES + STREAM_TAIL_BYTES + 4096;
-    const r = await runBashCommand(
-      `head -c ${totalBytes} /dev/zero | tr '\\0' 'A'`,
-      5000,
-      undefined,
-      process.cwd()
-    );
+    const r = await run(`head -c ${totalBytes} /dev/zero | tr '\\0' 'A'`);
     try {
       expect(r.exitCode).toBe(0);
       expect(r.stdout.truncated).toBe(true);
@@ -257,7 +281,7 @@ describe("runBashCommand (integration)", () => {
   });
 
   test("omits spill path when stream is empty", async () => {
-    const r = await runBashCommand("true", 5000, undefined, process.cwd());
+    const r = await run("true");
     expect(r.exitCode).toBe(0);
     expect(r.stdout.path).toBeNull();
     expect(r.stderr.path).toBeNull();
