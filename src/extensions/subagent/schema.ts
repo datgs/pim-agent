@@ -31,6 +31,14 @@ export const subagentSchema = Type.Object({
         "Use this for source the prompt does not already cite as path:line: cited files are inlined automatically, and this list takes priority when the two together exceed the budget.",
     })
   ),
+  background: Type.Optional(
+    Type.Boolean({
+      description:
+        "If true, launch the subagent in the background and return a job id immediately instead of waiting for its result. " +
+        "The subagent runs while this process lives; its completion is reported back to this session, and its output is " +
+        "retrievable via the jobs tool (action: status/output/kill). Use for independent research or work that should run alongside the parent.",
+    })
+  ),
 });
 
 export type SubagentInput = Static<typeof subagentSchema>;

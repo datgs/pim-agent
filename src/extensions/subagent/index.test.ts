@@ -1,12 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { JsonObject } from "@earendil-works/pi-ai";
-import registerSubagent from "./index";
+import { Jobs } from "../../shared/Jobs";
+import registerSubagent, { setRunSubagentForTests } from "./index";
 import { subagentSchema } from "./schema";
+import type { SubagentDetails } from "./subagent";
 
 function validate(args: unknown): void {
   validateToolArguments(
@@ -18,6 +20,47 @@ function validate(args: unknown): void {
       arguments: args as JsonObject,
     }
   );
+}
+
+afterEach(() => {
+  setRunSubagentForTests(undefined);
+  Jobs.resetForTests();
+});
+
+function captureTool(): {
+  readonly pi: ExtensionAPI;
+  readonly sent: { content: unknown; options: unknown }[];
+  tool(): {
+    execute: (...args: unknown[]) => Promise<unknown>;
+  };
+} {
+  const sent: { content: unknown; options: unknown }[] = [];
+  let tool:
+    | {
+        execute: (...args: unknown[]) => Promise<unknown>;
+      }
+    | undefined;
+  const pi = {
+    on(): void {},
+    registerTool(def: unknown) {
+      tool = def as typeof tool;
+    },
+    getActiveTools: () => ["read", "bash"],
+    sendMessage(content: unknown, options: unknown): void {
+      sent.push({ content, options });
+    },
+  } as unknown as ExtensionAPI;
+  registerSubagent(pi);
+  return {
+    pi,
+    sent,
+    tool() {
+      if (!tool) {
+        throw new Error("tool not registered");
+      }
+      return tool;
+    },
+  };
 }
 
 describe("subagent extension registration", () => {
@@ -49,6 +92,7 @@ describe("subagent extension registration", () => {
       .properties as Record<string, Record<string, unknown>>;
     expect(Object.keys(wireProps).sort()).toEqual([
       "agent",
+      "background",
       "context_paths",
       "prompt",
     ]);
@@ -108,5 +152,120 @@ describe("subagent extension registration", () => {
       globalThis.setTimeout = realSetTimeout;
       globalThis.clearTimeout = realClearTimeout;
     }
+  });
+});
+
+describe("background subagents", () => {
+  const toolCtx = { cwd: "/work" } as ExtensionContext;
+
+  function fakeResult(text: string) {
+    return {
+      content: [{ type: "text" as const, text }],
+      details: {} as SubagentDetails,
+    };
+  }
+
+  test("returns a job id immediately and notifies on completion", async () => {
+    const { sent, tool } = captureTool();
+    let release: ((v: ReturnType<typeof fakeResult>) => void) | undefined;
+    const gate = new Promise<ReturnType<typeof fakeResult>>((resolve) => {
+      release = resolve;
+    });
+    setRunSubagentForTests((async () => gate) as never);
+
+    const result = (await tool().execute(
+      "call-1",
+      { prompt: "research the thing", background: true },
+      undefined,
+      undefined,
+      toolCtx
+    )) as { content: { text: string }[]; details: SubagentDetails };
+
+    expect(result.content[0]!.text).toContain("subagent-");
+    const job = Jobs.list()[0];
+    expect(job?.kind).toBe("subagent");
+    expect(job?.status).toBe("running");
+
+    release?.(fakeResult("deep findings"));
+    await Bun.sleep(0);
+    await Bun.sleep(0);
+
+    const settled = Jobs.get(job!.id);
+    expect(settled?.status).toBe("completed");
+    expect(settled?.output.text).toBe("deep findings");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.options).toEqual({ triggerTurn: true });
+    const msg = sent[0]!.content as { customType: string; content: string };
+    expect(msg.customType).toBe("subagent-report");
+    expect(msg.content).toContain("deep findings");
+  });
+
+  test("reports failures through the job and a follow-up message", async () => {
+    const { sent, tool } = captureTool();
+    setRunSubagentForTests((async () => {
+      throw new Error("provider exploded");
+    }) as never);
+
+    await tool().execute(
+      "call-1",
+      { prompt: "doomed task", background: true },
+      undefined,
+      undefined,
+      toolCtx
+    );
+    await Bun.sleep(0);
+    await Bun.sleep(0);
+
+    const job = Jobs.list()[0];
+    expect(job?.status).toBe("failed");
+    expect(job?.error).toBe("provider exploded");
+    expect(sent).toHaveLength(1);
+  });
+
+  test("jobs kill aborts the background run without a failure report", async () => {
+    const { sent, tool } = captureTool();
+    let seenSignal: AbortSignal | undefined;
+    setRunSubagentForTests(((
+      _p: string,
+      _c: unknown,
+      signal: AbortSignal | undefined
+    ) => {
+      seenSignal = signal;
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new Error("aborted"));
+        });
+      });
+    }) as never);
+
+    await tool().execute(
+      "call-1",
+      { prompt: "slow work", background: true },
+      undefined,
+      undefined,
+      toolCtx
+    );
+    const job = Jobs.list()[0]!;
+    expect(Jobs.cancel(job.id)).toBe(true);
+    expect(seenSignal?.aborted).toBe(true);
+    await Bun.sleep(0);
+    await Bun.sleep(0);
+    expect(Jobs.get(job.id)?.status).toBe("cancelled");
+    // Cancelled jobs are not reported as failed to the parent.
+    expect(sent).toHaveLength(0);
+  });
+
+  test("foreground calls still wait for the result", async () => {
+    const { tool } = captureTool();
+    setRunSubagentForTests((async () => fakeResult("sync answer")) as never);
+    const result = (await tool().execute(
+      "call-1",
+      { prompt: "direct" },
+      undefined,
+      undefined,
+      toolCtx
+    )) as { content: { text: string }[] };
+    expect(result.content[0]!.text).toBe("sync answer");
+    expect(Jobs.list()).toHaveLength(0);
   });
 });
