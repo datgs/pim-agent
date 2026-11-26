@@ -100,12 +100,12 @@ function assistant(text: string): AgentMessage {
 }
 
 describe("activity-summary wiring", () => {
-  test("renders widget from branch messages on session_start", () => {
+  test("renders the [Activity] button from branch messages on session_start", () => {
     const h = harness([msgEntry(user("Làm widget"), "m1")]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
     const lines = h.widgets.get(WIDGET_ID);
     expect(lines).toBeDefined();
-    expect(lines!.join("\n")).toContain("• Làm widget");
+    expect(lines!.join("\n")).toContain("[Activity]");
   });
 
   test("hides widget when branch has no messages", () => {
@@ -126,22 +126,18 @@ describe("activity-summary wiring", () => {
       message: assistant("Đã đọc.\nTiếp theo: viết summary"),
     });
     const text = h.widgets.get(WIDGET_ID)!.join("\n");
-    expect(text).toContain("Đọc code và tóm tắt");
-    expect(text).toContain("Tiếp theo: viết summary");
+    expect(text).toContain("[Activity]");
   });
 
-  test("session_tree rebuilds from the new branch", () => {
-    const forked = harness([msgEntry(user("Nhánh A"), "m1")]);
-    forked.emit("session_start", { type: "session_start", reason: "fork" });
-    const textA = forked.widgets.get(WIDGET_ID)!.join("\n");
-    expect(textA).toContain("Nhánh A");
+  test("session_tree hides the button on a branch without summary content", () => {
+    const h = harness([msgEntry(user("Nhánh A"), "m1")]);
+    h.emit("session_start", { type: "session_start", reason: "fork" });
+    expect(h.widgets.get(WIDGET_ID)!.join("\n")).toContain("[Activity]");
 
-    // Simulate branch switch: same harness sees different branch entries
-    const other = harness([msgEntry(user("Nhánh B"), "m2")]);
+    // A branch with no messages yields no summary → button hidden
+    const other = harness([]);
     other.emit("session_tree", { type: "session_tree" });
-    const textB = other.widgets.get(WIDGET_ID)!.join("\n");
-    expect(textB).toContain("Nhánh B");
-    expect(textB).not.toContain("Nhánh A");
+    expect(other.widgets.get(WIDGET_ID)).toBeUndefined();
   });
 
   test("/activity toggles the widget off and on", async () => {

@@ -4,6 +4,8 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
   type Component,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
 export class ActivityDetail implements Component {
@@ -18,9 +20,18 @@ export class ActivityDetail implements Component {
   ) {}
 
   handleInput(data: string): void {
-    if (data === "\x1b" || data === "q") {
+    if (data === "\x1b") {
       this.onClose();
     }
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    // "[x]" sits at the end of row 0, after one separating space.
+    if (event.type === "click" && event.y === 0 && event.x >= event.width - 4) {
+      this.onClose();
+      return { handled: true };
+    }
+    return undefined;
   }
 
   invalidate(): void {
@@ -49,8 +60,16 @@ export class ActivityDetail implements Component {
     };
 
     const heading = `─ ${this.title} `;
-    const topRemain = Math.max(1, inner - visibleWidth(heading));
-    const lines: string[] = [border(`┌${heading}${"─".repeat(topRemain)}┐`)];
+    const close = "[x]";
+    const topRemain = Math.max(
+      1,
+      inner - visibleWidth(heading) - visibleWidth(close) - 1
+    );
+    const lines: string[] = [
+      border(`┌${heading}${"─".repeat(topRemain)} `) +
+        theme.fg("dim", close) +
+        border("┐"),
+    ];
 
     for (const bullet of this.bullets) {
       for (const line of wrapTextWithAnsi(`• ${bullet}`, inner)) {
@@ -58,8 +77,6 @@ export class ActivityDetail implements Component {
       }
     }
 
-    lines.push(border("│" + " ".repeat(inner) + "│"));
-    lines.push(row("Esc or q to close", "muted"));
     lines.push(border(`└${"─".repeat(inner)}┘`));
 
     this.cachedWidth = width;
