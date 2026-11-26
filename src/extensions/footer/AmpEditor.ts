@@ -5,8 +5,14 @@ import {
   type KeybindingsManager,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
+import type {
+  EditorTheme,
+  TUI,
+  TuiMouseEvent,
+  TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { ActivityButton } from "../../shared/ActivityButton";
 import { Paths } from "../../shared/Paths";
 import { PromptHistory } from "../../shared/PromptHistory";
 import type { GitState } from "./git";
@@ -137,6 +143,8 @@ function formatGit(state: GitState, theme: Theme): string {
 
 export class AmpEditor extends CustomEditor {
   private workingStatus: WorkingStatusIndicator | undefined;
+  private activityStart = -1;
+  private activityEnd = -1;
 
   public constructor(
     tui: TUI,
@@ -205,8 +213,14 @@ export class AmpEditor extends CustomEditor {
     const path = Paths.abbreviateHome(ctx.sessionManager.getCwd());
     const git = formatGit(this.options.getGitState(), theme);
 
-    const left =
+    const activity = ActivityButton.isShown();
+    const cost =
       stats.cost > 0 ? theme.fg("muted", ` $${stats.cost.toFixed(2)} `) : "";
+    const left = activity ? `${cost}${theme.fg("dim", " [Activity] ")}` : cost;
+    this.activityStart = activity ? visibleWidth(cost) + 2 : -1;
+    this.activityEnd = activity
+      ? this.activityStart + "[Activity]".length - 1
+      : -1;
     const right = theme.fg("muted", ` ${path}`) + git + theme.fg("muted", " ");
 
     return fitBorder(
@@ -216,6 +230,24 @@ export class AmpEditor extends CustomEditor {
       (text) => this.borderColor(text),
       scrollMarker(theme, "↓", hiddenLineCount)
     );
+  }
+
+  public override handleMouse(
+    event: TuiMouseEvent
+  ): TuiMouseEventResult | undefined {
+    // The [Activity] chip sits in the bottom border (last rendered row).
+    if (
+      event.type === "click" &&
+      event.button === "left" &&
+      event.y === event.height - 1 &&
+      this.activityStart >= 0 &&
+      event.x >= this.activityStart &&
+      event.x <= this.activityEnd
+    ) {
+      ActivityButton.open();
+      return { handled: true };
+    }
+    return super.handleMouse(event);
   }
 
   public override render(width: number): string[] {

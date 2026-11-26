@@ -4,12 +4,9 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { MouseRegion, type TUI } from "@earendil-works/pi-tui";
-import { ActivityPill } from "./box";
+import { ActivityButton } from "../../shared/ActivityButton";
 import { ActivityDetail } from "./detail";
 import { buildActivitySummary, type ActivitySummary } from "./summary";
-
-const WIDGET_ID = "pim-activity";
 
 function messagesFromBranch(entries: readonly SessionEntry[]): AgentMessage[] {
   return entries
@@ -24,15 +21,12 @@ export default function (pi: ExtensionAPI): void {
   let summary: ActivitySummary | null = null;
   let messages: AgentMessage[] = [];
   let enabled = true;
-  let lastCtx: ExtensionContext | undefined;
-  let lastTui: TUI | undefined;
 
   const openDetail = (ctx: ExtensionContext): void => {
     if (!ctx.hasUI || !summary || summary.bullets.length === 0) {
       return;
     }
     const bullets = summary.bullets;
-    const wide = (lastTui?.terminal.columns ?? 0) >= 100;
     ctx.ui.custom(
       (_tui, theme, _keybindings, done) =>
         new ActivityDetail("Current Activity", bullets, theme, () =>
@@ -40,33 +34,24 @@ export default function (pi: ExtensionAPI): void {
         ),
       {
         overlay: true,
-        overlayOptions: {
-          anchor: wide ? "right-center" : "center",
-          width: wide ? "40%" : "80%",
-          minWidth: 40,
-          nonCapturing: true,
+        overlayOptions: () => {
+          const wide = (process.stdout.columns ?? 0) >= 100;
+          return {
+            anchor: wide ? "right-center" : "center",
+            width: wide ? "40%" : "80%",
+            minWidth: 40,
+            nonCapturing: true,
+          };
         },
       }
     );
   };
 
   const render = (ctx: ExtensionContext): void => {
-    lastCtx = ctx;
-    if (!ctx.hasUI || !enabled || !summary || summary.bullets.length === 0) {
-      ctx.ui.setWidget(WIDGET_ID, undefined);
-      return;
-    }
-    ctx.ui.setWidget(WIDGET_ID, (tui, theme) => {
-      lastTui = tui;
-      const pill = new ActivityPill("Activity", theme);
-      return new MouseRegion(pill, (event) => {
-        if (event.type === "click" && lastCtx) {
-          openDetail(lastCtx);
-          return { handled: true };
-        }
-        return undefined;
-      });
-    });
+    ActivityButton.register(() => openDetail(ctx));
+    ActivityButton.setShown(
+      ctx.hasUI && enabled && !!summary && summary.bullets.length > 0
+    );
   };
 
   const recompute = (ctx: ExtensionContext): void => {
@@ -89,15 +74,13 @@ export default function (pi: ExtensionAPI): void {
     recompute(ctx);
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
-    if (ctx.hasUI) {
-      ctx.ui.setWidget(WIDGET_ID, undefined);
-    }
+  pi.on("session_shutdown", () => {
+    ActivityButton.setShown(false);
   });
 
   pi.registerCommand("activity", {
     description:
-      "Show/toggle the activity button above the composer: /activity [on|off]",
+      "Show/hide the [Activity] button on the composer status line: /activity [on|off]",
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
       if (arg === "on") {

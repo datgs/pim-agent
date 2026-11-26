@@ -5,16 +5,14 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { ActivityButton } from "../../shared/ActivityButton";
 import registerActivitySummary from "./index";
-
-const WIDGET_ID = "pim-activity";
 
 type Handler = (event: never, ctx: ExtensionContext) => void;
 
 type Harness = {
   readonly handlers: Map<string, Handler>;
   readonly commands: Map<string, { handler: Function }>;
-  readonly widgets: Map<string, string[] | undefined>;
   readonly ctx: ExtensionContext;
   emit(event: string, data?: unknown): void;
 };
@@ -22,33 +20,15 @@ type Harness = {
 function harness(branch: readonly SessionEntry[] = []): Harness {
   const handlers = new Map<string, Handler>();
   const commands = new Map<string, { handler: Function }>();
-  const widgets = new Map<string, string[] | undefined>();
-
-  const theme = {
-    fg: (_color: string, text: string) => text,
-  };
-
-  const setWidget = (
-    key: string,
-    content:
-      | string[]
-      | ((tui: unknown, t: typeof theme) => { render(w: number): string[] })
-      | undefined
-  ): void => {
-    if (typeof content === "function") {
-      widgets.set(key, content({}, theme).render(60));
-      return;
-    }
-    widgets.set(key, content);
-  };
 
   const ctx = {
     cwd: "/work",
     hasUI: true,
     ui: {
-      theme,
-      setWidget,
+      theme: { fg: (_c: string, t: string) => t },
+      setWidget: (): void => {},
       notify: (): void => {},
+      custom: (): Promise<undefined> => Promise.resolve(undefined),
     },
     sessionManager: {
       getBranch: () => [...branch],
@@ -69,7 +49,6 @@ function harness(branch: readonly SessionEntry[] = []): Harness {
   return {
     handlers,
     commands,
-    widgets,
     ctx,
     emit(event: string, data?: unknown): void {
       handlers.get(event)?.(data as never, ctx);
@@ -91,65 +70,53 @@ function user(text: string): AgentMessage {
   return { role: "user", content: text, timestamp: 0 } as AgentMessage;
 }
 
-function assistant(text: string): AgentMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp: 0,
-  } as AgentMessage;
-}
-
 describe("activity-summary wiring", () => {
-  test("renders the [Activity] button from branch messages on session_start", () => {
+  test("shows the button when branch messages produce a summary", () => {
+    ActivityButton.setShown(false);
     const h = harness([msgEntry(user("Làm widget"), "m1")]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
-    const lines = h.widgets.get(WIDGET_ID);
-    expect(lines).toBeDefined();
-    expect(lines!.join("\n")).toContain("[Activity]");
+    expect(ActivityButton.isShown()).toBe(true);
   });
 
-  test("hides widget when branch has no messages", () => {
+  test("hides the button when branch has no messages", () => {
+    ActivityButton.setShown(true);
     const h = harness([]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
-    expect(h.widgets.get(WIDGET_ID)).toBeUndefined();
+    expect(ActivityButton.isShown()).toBe(false);
   });
 
-  test("updates widget on message_end", () => {
+  test("shows the button on message_end", () => {
+    ActivityButton.setShown(false);
     const h = harness([]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
+    expect(ActivityButton.isShown()).toBe(false);
     h.emit("message_end", {
       type: "message_end",
       message: user("Đọc code và tóm tắt"),
     });
-    h.emit("message_end", {
-      type: "message_end",
-      message: assistant("Đã đọc.\nTiếp theo: viết summary"),
-    });
-    const text = h.widgets.get(WIDGET_ID)!.join("\n");
-    expect(text).toContain("[Activity]");
+    expect(ActivityButton.isShown()).toBe(true);
   });
 
-  test("session_tree hides the button on a branch without summary content", () => {
+  test("session_tree hides the button on a branch without content", () => {
     const h = harness([msgEntry(user("Nhánh A"), "m1")]);
     h.emit("session_start", { type: "session_start", reason: "fork" });
-    expect(h.widgets.get(WIDGET_ID)!.join("\n")).toContain("[Activity]");
+    expect(ActivityButton.isShown()).toBe(true);
 
-    // A branch with no messages yields no summary → button hidden
     const other = harness([]);
     other.emit("session_tree", { type: "session_tree" });
-    expect(other.widgets.get(WIDGET_ID)).toBeUndefined();
+    expect(ActivityButton.isShown()).toBe(false);
   });
 
-  test("/activity toggles the widget off and on", async () => {
+  test("/activity toggles the button off and on", async () => {
     const h = harness([msgEntry(user("Chủ đề"), "m1")]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
-    expect(h.widgets.get(WIDGET_ID)).toBeDefined();
+    expect(ActivityButton.isShown()).toBe(true);
 
     await h.commands.get("activity")!.handler("", h.ctx);
-    expect(h.widgets.get(WIDGET_ID)).toBeUndefined();
+    expect(ActivityButton.isShown()).toBe(false);
 
     await h.commands.get("activity")!.handler("", h.ctx);
-    expect(h.widgets.get(WIDGET_ID)).toBeDefined();
+    expect(ActivityButton.isShown()).toBe(true);
   });
 
   test("/activity on|off sets state explicitly", async () => {
@@ -157,20 +124,19 @@ describe("activity-summary wiring", () => {
     h.emit("session_start", { type: "session_start", reason: "startup" });
 
     await h.commands.get("activity")!.handler("off", h.ctx);
-    expect(h.widgets.get(WIDGET_ID)).toBeUndefined();
+    expect(ActivityButton.isShown()).toBe(false);
 
-    // off again stays off (no toggle confusion)
     await h.commands.get("activity")!.handler("off", h.ctx);
-    expect(h.widgets.get(WIDGET_ID)).toBeUndefined();
+    expect(ActivityButton.isShown()).toBe(false);
 
     await h.commands.get("activity")!.handler("on", h.ctx);
-    expect(h.widgets.get(WIDGET_ID)).toBeDefined();
+    expect(ActivityButton.isShown()).toBe(true);
   });
 
-  test("session_shutdown clears the widget", () => {
+  test("session_shutdown hides the button", () => {
     const h = harness([msgEntry(user("Chủ đề"), "m1")]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
     h.emit("session_shutdown", { type: "session_shutdown" });
-    expect(h.widgets.get(WIDGET_ID)).toBeUndefined();
+    expect(ActivityButton.isShown()).toBe(false);
   });
 });
