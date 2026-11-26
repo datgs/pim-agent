@@ -59,3 +59,9 @@ related_code:
 - User selected a compact persistent summary with an expandable detailed view; right-side popup is acceptable if it does not crowd narrow terminals.
 - User emphasized a persistent current-task/topic summary near the chat composer, useful when returning to a long conversation or switching between tasks.
 - User requested that checklist wording follow the language used in the conversation rather than defaulting to English.
+
+## Implementation notes (verified 2026-11-26)
+- `/reload` does not reliably pick up a brand-new extension module (pi keeps the resource-loader cache); a fresh `hd-agent` session is required for first-time testing. Subsequent edits to an already-loaded extension do reload.
+- Global pi package cache (`~/.pi/agent/git/github.com/tuong-nguyen-vn/hd-agent`) was checked out to the PR branch `feat/activity-summary` for local testing; revert to `main` after merge.
+- The `[Activity]` button lives inside the AmpEditor (powerline) bottom border, next to cost — no extra UI row. Shared state uses `globalThis` because extension modules can resolve to different pi copies.
+- Detail overlay is `nonCapturing: true` so chat input stays usable; any click inside (including `[x]`) dismisses it.
