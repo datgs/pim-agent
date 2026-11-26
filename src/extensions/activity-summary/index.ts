@@ -31,7 +31,7 @@ export default function (pi: ExtensionAPI): void {
     const bullets = summary.bullets;
     ctx.ui.setWidget(
       WIDGET_ID,
-      (_tui, theme) => new ActivityBox("Activity", bullets, theme)
+      (_tui, theme) => new ActivityBox("Current Activity", bullets, theme)
     );
   };
 
