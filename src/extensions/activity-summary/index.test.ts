@@ -144,6 +144,21 @@ describe("activity-summary wiring", () => {
     expect(h.widgets.get(WIDGET_ID)).toBeDefined();
   });
 
+  test("/activity on|off sets state explicitly", async () => {
+    const h = harness([msgEntry(user("Chủ đề"), "m1")]);
+    h.emit("session_start", { type: "session_start", reason: "startup" });
+
+    await h.commands.get("activity")!.handler("off", h.ctx);
+    expect(h.widgets.get(WIDGET_ID)).toBeUndefined();
+
+    // off again stays off (no toggle confusion)
+    await h.commands.get("activity")!.handler("off", h.ctx);
+    expect(h.widgets.get(WIDGET_ID)).toBeUndefined();
+
+    await h.commands.get("activity")!.handler("on", h.ctx);
+    expect(h.widgets.get(WIDGET_ID)).toBeDefined();
+  });
+
   test("session_shutdown clears the widget", () => {
     const h = harness([msgEntry(user("Chủ đề"), "m1")]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
