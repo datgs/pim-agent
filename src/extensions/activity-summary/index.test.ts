@@ -28,14 +28,26 @@ function harness(branch: readonly SessionEntry[] = []): Harness {
     fg: (_color: string, text: string) => text,
   };
 
+  const setWidget = (
+    key: string,
+    content:
+      | string[]
+      | ((tui: unknown, t: typeof theme) => { render(w: number): string[] })
+      | undefined
+  ): void => {
+    if (typeof content === "function") {
+      widgets.set(key, content({}, theme).render(60));
+      return;
+    }
+    widgets.set(key, content);
+  };
+
   const ctx = {
     cwd: "/work",
     hasUI: true,
     ui: {
       theme,
-      setWidget: (key: string, content: string[] | undefined): void => {
-        widgets.set(key, content);
-      },
+      setWidget,
       notify: (): void => {},
     },
     sessionManager: {

@@ -4,6 +4,7 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { ActivityBox } from "./box";
 import { buildActivitySummary, type ActivitySummary } from "./summary";
 
 const WIDGET_ID = "pim-activity";
@@ -27,13 +28,11 @@ export default function (pi: ExtensionAPI): void {
       ctx.ui.setWidget(WIDGET_ID, undefined);
       return;
     }
-    const theme = ctx.ui.theme;
-    const lines = [
-      theme.fg("muted", "Activity"),
-      ...summary.bullets.map((b) => theme.fg("dim", `• ${b}`)),
-      "",
-    ];
-    ctx.ui.setWidget(WIDGET_ID, lines);
+    const bullets = summary.bullets;
+    ctx.ui.setWidget(
+      WIDGET_ID,
+      (_tui, theme) => new ActivityBox("Activity", bullets, theme)
+    );
   };
 
   const recompute = (ctx: ExtensionContext): void => {
