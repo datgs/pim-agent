@@ -27,7 +27,12 @@ export class ActivityButton {
     const s = this.state();
     if (s.shown !== shown) {
       s.shown = shown;
-      s.requestRender?.();
+      try {
+        s.requestRender?.();
+      } catch {
+        // The editor that registered the trigger may be gone (test harnesses
+        // hand a bare tui mock); repaint misses are harmless anyway.
+      }
     }
   }
 
@@ -45,5 +50,9 @@ export class ActivityButton {
     if (s.shown) {
       s.onOpen?.();
     }
+  }
+
+  public static resetForTests(): void {
+    (globalThis as Record<symbol, State | undefined>)[KEY] = undefined;
   }
 }

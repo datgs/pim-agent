@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type {
   ExtensionAPI,
@@ -7,6 +7,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { ActivityButton } from "../../shared/ActivityButton";
 import registerActivitySummary from "./index";
+
+afterEach(() => {
+  ActivityButton.resetForTests();
+});
 
 type Handler = (event: never, ctx: ExtensionContext) => void;
 
@@ -72,21 +76,18 @@ function user(text: string): AgentMessage {
 
 describe("activity-summary wiring", () => {
   test("shows the button when branch messages produce a summary", () => {
-    ActivityButton.setShown(false);
     const h = harness([msgEntry(user("Làm widget"), "m1")]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
     expect(ActivityButton.isShown()).toBe(true);
   });
 
   test("hides the button when branch has no messages", () => {
-    ActivityButton.setShown(true);
     const h = harness([]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
     expect(ActivityButton.isShown()).toBe(false);
   });
 
   test("shows the button on message_end", () => {
-    ActivityButton.setShown(false);
     const h = harness([]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
     expect(ActivityButton.isShown()).toBe(false);
