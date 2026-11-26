@@ -155,6 +155,9 @@ export class AmpEditor extends CustomEditor {
     // embedWorkingStatus makes pi hand the streaming indicator to this editor
     // instead of stacking it above; renderTopBorder() places it.
     super(tui, theme, keybindings, { paddingX: 1, embedWorkingStatus: true });
+    // The button's visibility is updated from session events outside the
+    // editor; give it a way to repaint the border when the state changes.
+    ActivityButton.setRenderTrigger(() => tui.requestRender());
     // Seed prompt history from disk so up/down arrow navigation works across
     // sessions. Uses the base addToHistory() (not the override below) so this
     // replay doesn't immediately re-persist the same entries back to disk.
