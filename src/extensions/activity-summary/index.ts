@@ -44,6 +44,7 @@ export default function (pi: ExtensionAPI): void {
           anchor: wide ? "right-center" : "center",
           width: wide ? "40%" : "80%",
           minWidth: 40,
+          nonCapturing: true,
         },
       }
     );

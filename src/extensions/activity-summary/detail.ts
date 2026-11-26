@@ -26,8 +26,8 @@ export class ActivityDetail implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    // "[x]" sits at the end of row 0, after one separating space.
-    if (event.type === "click" && event.y === 0 && event.x >= event.width - 4) {
+    // Read-only view: any click inside dismisses; "[x]" marks that affordance.
+    if (event.type === "click") {
       this.onClose();
       return { handled: true };
     }
