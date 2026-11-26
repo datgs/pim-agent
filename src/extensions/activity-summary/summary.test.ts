@@ -64,8 +64,8 @@ describe("buildActivitySummary", () => {
   });
 
   test("truncates long topics", () => {
-    const long = "a".repeat(200);
+    const long = "a".repeat(300);
     const s = buildActivitySummary([user(long)]);
-    expect(s?.bullets[0]!.length).toBeLessThanOrEqual(120);
+    expect(s?.bullets[0]!.length).toBeLessThanOrEqual(200);
   });
 });

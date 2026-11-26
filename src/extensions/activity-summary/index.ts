@@ -4,7 +4,9 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { MouseRegion, type TUI } from "@earendil-works/pi-tui";
 import { ActivityBox } from "./box";
+import { ActivityDetail } from "./detail";
 import { buildActivitySummary, type ActivitySummary } from "./summary";
 
 const WIDGET_ID = "pim-activity";
@@ -22,17 +24,49 @@ export default function (pi: ExtensionAPI): void {
   let summary: ActivitySummary | null = null;
   let messages: AgentMessage[] = [];
   let enabled = true;
+  let lastCtx: ExtensionContext | undefined;
+  let lastTui: TUI | undefined;
+
+  const openDetail = (ctx: ExtensionContext): void => {
+    if (!ctx.hasUI || !summary || summary.bullets.length === 0) {
+      return;
+    }
+    const bullets = summary.bullets;
+    const wide = (lastTui?.terminal.columns ?? 0) >= 100;
+    ctx.ui.custom(
+      (_tui, theme, _keybindings, done) =>
+        new ActivityDetail("Current Activity", bullets, theme, () =>
+          done(undefined)
+        ),
+      {
+        overlay: true,
+        overlayOptions: {
+          anchor: wide ? "right-center" : "center",
+          width: wide ? "40%" : "80%",
+          minWidth: 40,
+        },
+      }
+    );
+  };
 
   const render = (ctx: ExtensionContext): void => {
+    lastCtx = ctx;
     if (!ctx.hasUI || !enabled || !summary || summary.bullets.length === 0) {
       ctx.ui.setWidget(WIDGET_ID, undefined);
       return;
     }
     const bullets = summary.bullets;
-    ctx.ui.setWidget(
-      WIDGET_ID,
-      (_tui, theme) => new ActivityBox("Current Activity", bullets, theme)
-    );
+    ctx.ui.setWidget(WIDGET_ID, (tui, theme) => {
+      lastTui = tui;
+      const box = new ActivityBox("Current Activity", bullets, theme);
+      return new MouseRegion(box, (event) => {
+        if (event.type === "click" && lastCtx) {
+          openDetail(lastCtx);
+          return { handled: true };
+        }
+        return undefined;
+      });
+    });
   };
 
   const recompute = (ctx: ExtensionContext): void => {

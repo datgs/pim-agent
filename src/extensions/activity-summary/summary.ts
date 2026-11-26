@@ -11,7 +11,7 @@ const NEXT_STEP_PATTERN =
 const DONE_MARKER = /\[DONE:?(\d+)?\]/i;
 
 const MAX_BULLETS = 3;
-const MAX_TEXT = 120;
+const MAX_TEXT = 200;
 
 const VIETNAMESE_MARKERS =
   /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
