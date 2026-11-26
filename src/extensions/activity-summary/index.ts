@@ -24,6 +24,7 @@ export default function (pi: ExtensionAPI): void {
   let summary: ActivitySummary | null = null;
   let messages: AgentMessage[] = [];
   let enabled = true;
+  let collapsed = false;
   let lastCtx: ExtensionContext | undefined;
   let lastTui: TUI | undefined;
 
@@ -56,12 +57,29 @@ export default function (pi: ExtensionAPI): void {
       return;
     }
     const bullets = summary.bullets;
+    const isCollapsed = collapsed;
     ctx.ui.setWidget(WIDGET_ID, (tui, theme) => {
       lastTui = tui;
       const box = new ActivityBox("Current Activity", bullets, theme);
+      if (isCollapsed) {
+        return new MouseRegion(
+          {
+            render: (w: number) => box.renderCollapsed(w),
+            invalidate: () => box.invalidate(),
+          },
+          (event) => {
+            if (event.type === "click" && lastCtx) {
+              openDetail(lastCtx);
+              return { handled: true };
+            }
+            return undefined;
+          }
+        );
+      }
       return new MouseRegion(box, (event) => {
         if (event.type === "click" && lastCtx) {
-          openDetail(lastCtx);
+          collapsed = true;
+          render(lastCtx);
           return { handled: true };
         }
         return undefined;
@@ -104,10 +122,14 @@ export default function (pi: ExtensionAPI): void {
         enabled = true;
       } else if (arg === "off") {
         enabled = false;
+      } else if (arg === "collapse") {
+        collapsed = true;
+      } else if (arg === "expand") {
+        collapsed = false;
       } else if (arg === "") {
         enabled = !enabled;
       } else {
-        ctx.ui.notify("Usage: /activity [on|off]", "warning");
+        ctx.ui.notify("Usage: /activity [on|off|collapse|expand]", "warning");
         return;
       }
       render(ctx);
