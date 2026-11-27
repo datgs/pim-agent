@@ -5,11 +5,11 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { ActivityButton } from "../../shared/ActivityButton";
+import { ActivityLine } from "../../shared/ActivityLine";
 import registerActivitySummary from "./index";
 
 afterEach(() => {
-  ActivityButton.resetForTests();
+  ActivityLine.resetForTests();
 });
 
 type Handler = (event: never, ctx: ExtensionContext) => void;
@@ -78,46 +78,46 @@ describe("activity-summary wiring", () => {
   test("shows the button when branch messages produce a summary", () => {
     const h = harness([msgEntry(user("Làm widget"), "m1")]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
-    expect(ActivityButton.isShown()).toBe(true);
+    expect(ActivityLine.getText() !== undefined).toBe(true);
   });
 
   test("hides the button when branch has no messages", () => {
     const h = harness([]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
-    expect(ActivityButton.isShown()).toBe(false);
+    expect(ActivityLine.getText() !== undefined).toBe(false);
   });
 
   test("shows the button on message_end", () => {
     const h = harness([]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
-    expect(ActivityButton.isShown()).toBe(false);
+    expect(ActivityLine.getText() !== undefined).toBe(false);
     h.emit("message_end", {
       type: "message_end",
       message: user("Đọc code và tóm tắt"),
     });
-    expect(ActivityButton.isShown()).toBe(true);
+    expect(ActivityLine.getText() !== undefined).toBe(true);
   });
 
   test("session_tree hides the button on a branch without content", () => {
     const h = harness([msgEntry(user("Nhánh A"), "m1")]);
     h.emit("session_start", { type: "session_start", reason: "fork" });
-    expect(ActivityButton.isShown()).toBe(true);
+    expect(ActivityLine.getText() !== undefined).toBe(true);
 
     const other = harness([]);
     other.emit("session_tree", { type: "session_tree" });
-    expect(ActivityButton.isShown()).toBe(false);
+    expect(ActivityLine.getText() !== undefined).toBe(false);
   });
 
   test("/activity toggles the button off and on", async () => {
     const h = harness([msgEntry(user("Chủ đề"), "m1")]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
-    expect(ActivityButton.isShown()).toBe(true);
+    expect(ActivityLine.getText() !== undefined).toBe(true);
 
     await h.commands.get("activity")!.handler("", h.ctx);
-    expect(ActivityButton.isShown()).toBe(false);
+    expect(ActivityLine.getText() !== undefined).toBe(false);
 
     await h.commands.get("activity")!.handler("", h.ctx);
-    expect(ActivityButton.isShown()).toBe(true);
+    expect(ActivityLine.getText() !== undefined).toBe(true);
   });
 
   test("/activity on|off sets state explicitly", async () => {
@@ -125,19 +125,19 @@ describe("activity-summary wiring", () => {
     h.emit("session_start", { type: "session_start", reason: "startup" });
 
     await h.commands.get("activity")!.handler("off", h.ctx);
-    expect(ActivityButton.isShown()).toBe(false);
+    expect(ActivityLine.getText() !== undefined).toBe(false);
 
     await h.commands.get("activity")!.handler("off", h.ctx);
-    expect(ActivityButton.isShown()).toBe(false);
+    expect(ActivityLine.getText() !== undefined).toBe(false);
 
     await h.commands.get("activity")!.handler("on", h.ctx);
-    expect(ActivityButton.isShown()).toBe(true);
+    expect(ActivityLine.getText() !== undefined).toBe(true);
   });
 
   test("session_shutdown hides the button", () => {
     const h = harness([msgEntry(user("Chủ đề"), "m1")]);
     h.emit("session_start", { type: "session_start", reason: "startup" });
     h.emit("session_shutdown", { type: "session_shutdown" });
-    expect(ActivityButton.isShown()).toBe(false);
+    expect(ActivityLine.getText() !== undefined).toBe(false);
   });
 });

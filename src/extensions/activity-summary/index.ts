@@ -4,8 +4,7 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { ActivityButton } from "../../shared/ActivityButton";
-import { ActivityDetail } from "./detail";
+import { ActivityLine } from "../../shared/ActivityLine";
 import { buildActivitySummary, type ActivitySummary } from "./summary";
 
 function messagesFromBranch(entries: readonly SessionEntry[]): AgentMessage[] {
@@ -22,36 +21,12 @@ export default function (pi: ExtensionAPI): void {
   let messages: AgentMessage[] = [];
   let enabled = true;
 
-  const openDetail = (ctx: ExtensionContext): void => {
-    if (!ctx.hasUI || !summary || summary.bullets.length === 0) {
-      return;
-    }
-    const bullets = summary.bullets;
-    ctx.ui.custom(
-      (_tui, theme, _keybindings, done) =>
-        new ActivityDetail("Current Activity", bullets, theme, () =>
-          done(undefined)
-        ),
-      {
-        overlay: true,
-        overlayOptions: () => {
-          const wide = (process.stdout.columns ?? 0) >= 100;
-          return {
-            anchor: wide ? "right-center" : "center",
-            width: wide ? "40%" : "80%",
-            minWidth: 40,
-            nonCapturing: true,
-          };
-        },
-      }
-    );
-  };
-
   const render = (ctx: ExtensionContext): void => {
-    ActivityButton.register(() => openDetail(ctx));
-    ActivityButton.setShown(
-      ctx.hasUI && enabled && !!summary && summary.bullets.length > 0
-    );
+    const text =
+      ctx.hasUI && enabled && summary && summary.bullets.length > 0
+        ? summary.bullets.join(" · ")
+        : undefined;
+    ActivityLine.setText(text);
   };
 
   const recompute = (ctx: ExtensionContext): void => {
@@ -75,12 +50,12 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => {
-    ActivityButton.setShown(false);
+    ActivityLine.setText(undefined);
   });
 
   pi.registerCommand("activity", {
     description:
-      "Show/hide the [Activity] button on the composer status line: /activity [on|off]",
+      "Show/hide the activity caption on the composer status line: /activity [on|off]",
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
       if (arg === "on") {
