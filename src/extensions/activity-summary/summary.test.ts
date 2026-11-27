@@ -63,6 +63,17 @@ describe("buildActivitySummary", () => {
     expect(s?.bullets).toEqual(["Đọc code", "Tiếp theo: Viết widget"]);
   });
 
+  test("keeps all lines of a multi-line user request", () => {
+    const s = buildActivitySummary([
+      user(
+        "The implementation signals completions.\nHerdr notifications include unread counts.\nFailed jobs do not trigger it."
+      ),
+    ]);
+    expect(s?.bullets[0]).toContain("signals completions");
+    expect(s?.bullets[0]).toContain("unread counts");
+    expect(s?.bullets[0]).toContain("do not trigger");
+  });
+
   test("truncates long topics", () => {
     const long = "a".repeat(300);
     const s = buildActivitySummary([user(long)]);
