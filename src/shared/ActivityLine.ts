@@ -3,6 +3,7 @@ const KEY = Symbol.for("pim.activity-line");
 type State = {
   text: string | undefined;
   requestRender?: () => void;
+  onOpen?: () => void;
 };
 
 /**
@@ -37,6 +38,14 @@ export class ActivityLine {
 
   public static setRenderTrigger(requestRender: () => void): void {
     this.state().requestRender = requestRender;
+  }
+
+  public static setOnOpen(onOpen: (() => void) | undefined): void {
+    this.state().onOpen = onOpen;
+  }
+
+  public static open(): void {
+    this.state().onOpen?.();
   }
 
   public static resetForTests(): void {
