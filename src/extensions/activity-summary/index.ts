@@ -44,8 +44,16 @@ export default function (pi: ExtensionAPI): void {
     reviewShown = true;
   };
 
+  const toggleReview = (ctx: ExtensionContext): void => {
+    if (reviewShown) {
+      hideReview(ctx);
+    } else {
+      showReview(ctx);
+    }
+  };
+
   const render = (ctx: ExtensionContext): void => {
-    ActivityLine.setOnOpen(() => showReview(ctx));
+    ActivityLine.setOnOpen(() => toggleReview(ctx));
     // The border is one row: show the first line of the current item plus
     // an ellipsis when more content exists; the review widget shows it all.
     const firstBullet = summary?.bullets[0] ?? "";
