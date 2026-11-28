@@ -28,6 +28,25 @@ function truncate(text: string): string {
   return `${clean.slice(0, MAX_TEXT - 1)}…`;
 }
 
+const MAX_LINES = 8;
+
+function truncateMultiline(text: string): string {
+  const lines = text.split("\n").map((l) => l.trimEnd());
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") {
+    lines.pop();
+  }
+  const clipped = lines.slice(0, MAX_LINES);
+  let result = clipped.join("\n");
+  if (lines.length > MAX_LINES) {
+    result += `\n… (${lines.length - MAX_LINES} more lines)`;
+  }
+  if (result.length > MAX_TEXT * 3) {
+    result = `${result.slice(0, MAX_TEXT * 3 - 1)}…`;
+  }
+  result = result.trim();
+  return result.includes("\n") ? result : truncate(result);
+}
+
 function textOf(message: AgentMessage): string {
   if (message.role !== "assistant") {
     return "";
@@ -107,11 +126,7 @@ function extractNext(text: string): string | null {
 }
 
 function extractTopic(userText: string): string {
-  const firstLine = userText
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.length > 0);
-  return firstLine ? truncate(firstLine) : "";
+  return truncateMultiline(userText);
 }
 
 export function buildActivitySummary(

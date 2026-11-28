@@ -46,9 +46,17 @@ export default function (pi: ExtensionAPI): void {
 
   const render = (ctx: ExtensionContext): void => {
     ActivityLine.setOnOpen(() => showReview(ctx));
+    // The border is one row: show the first line of the current item plus
+    // an ellipsis when more content exists; the review widget shows it all.
+    const firstBullet = summary?.bullets[0] ?? "";
+    const firstLine = firstBullet.split("\n")[0] ?? "";
+    const hasMore =
+      firstBullet.includes("\n") || (summary?.bullets.length ?? 0) > 1;
     const text =
-      ctx.hasUI && enabled && summary && summary.bullets.length > 0
-        ? summary.bullets.join(" · ")
+      ctx.hasUI && enabled && firstLine
+        ? hasMore
+          ? `${firstLine} …`
+          : firstLine
         : undefined;
     ActivityLine.setText(text);
   };
